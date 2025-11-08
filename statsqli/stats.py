@@ -11,7 +11,7 @@ from typing import List, Tuple
 class TimingAnalyzer:
     """Analyzes timing measurements using statistical tests to avoid false positives."""
     
-    def __init__(self, confidence_level: float = 0.95, min_samples: int = 5):
+    def __init__(self, confidence_level: float = 0.99, min_samples: int = 5):
         """
         Initialize the timing analyzer.
         

@@ -11,7 +11,32 @@ import os
 app = Flask(__name__)
 
 # Initialize database
-DB_PATH = 'lab/vulnerable.db'
+# Use absolute path or relative to where app is run from
+# Check which database actually has tables
+def find_db_with_tables():
+    """Find the database file that has tables."""
+    import sqlite3
+    # Check databases that likely have tables first
+    for db_path in ['lab/lab/vulnerable.db', 'lab/vulnerable.db', 'vulnerable.db']:
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
+                conn.close()
+                if tables:
+                    print(f"[DEBUG] Using database with tables: {db_path}")
+                    return db_path
+            except Exception as e:
+                print(f"[DEBUG] Error checking {db_path}: {e}")
+                pass
+    # If no database with tables found, use default (will be initialized)
+    default_path = 'lab/vulnerable.db'
+    print(f"[DEBUG] No database with tables found, using default: {default_path}")
+    return default_path
+
+DB_PATH = find_db_with_tables()
 
 def init_db():
     """Initialize the vulnerable database."""
@@ -106,43 +131,121 @@ def vulnerable():
         
         should_delay = False
         delay_val = None
+        condition_sql = None
+        condition_match = False  # Initialize condition_match
         
         if sleep_match:
             delay_val = float(sleep_match.group(1))
             
+            # Debug: print what we're looking for
+            print(f"[DEBUG] Found SLEEP({delay_val}) in: {user_id[:100]}")
+            
             # Check if there's a condition before the SLEEP
             # Pattern: (condition) AND SLEEP(...)
-            condition_pattern = r'\(([^)]+)\)\s+AND\s+SLEEP'
-            condition_match = re.search(condition_pattern, user_id.upper())
+            # Need to handle nested parentheses correctly
+            # Look for: ... OR (condition) AND SLEEP
+            # Note: user_id comes from URL params, so it's already decoded
+            user_id_upper = user_id.upper()
+            or_pos = user_id_upper.find('OR')
+            if or_pos != -1:
+                # Find the opening paren after OR (skip whitespace)
+                search_start = or_pos + 2  # Skip "OR"
+                open_paren = -1
+                for i in range(search_start, len(user_id)):
+                    if user_id[i] == '(':
+                        open_paren = i
+                        break
+                    elif user_id[i] not in [' ', '\t']:
+                        # Not whitespace and not opening paren - no condition
+                        break
+                
+                if open_paren != -1:
+                    # Find " AND SLEEP" after the opening paren
+                    and_sleep_pos = user_id_upper.find(' AND SLEEP', open_paren)
+                    if and_sleep_pos != -1:
+                        # Count parentheses to find the matching closing one
+                        # Start with paren_count = 1 since we're already inside the opening paren
+                        paren_count = 1
+                        close_paren = -1
+                        for i in range(open_paren + 1, and_sleep_pos):
+                            if user_id[i] == '(':
+                                paren_count += 1
+                            elif user_id[i] == ')':
+                                paren_count -= 1
+                                if paren_count == 0:
+                                    close_paren = i
+                                    break
+                        
+                        if close_paren != -1:
+                            # Extract condition between the matching parentheses
+                            condition_sql = user_id[open_paren + 1:close_paren]
+                            condition_match = True
+                            # Debug: print extracted condition
+                            print(f"[DEBUG] Extracted condition: {condition_sql[:100]}")
+                        else:
+                            print(f"[DEBUG] Could not find matching closing paren")
+                            condition_match = False
+                    else:
+                        print(f"[DEBUG] Could not find ' AND SLEEP' after opening paren")
+                        condition_match = False
+                else:
+                    print(f"[DEBUG] Could not find opening paren after OR")
+                    condition_match = False
+            else:
+                print(f"[DEBUG] Could not find 'OR' in payload")
+                condition_match = False
             
             if condition_match:
-                # Extract the condition SQL
-                condition_sql = condition_match.group(1)
                 
                 # Try to evaluate the condition by executing it against the database
                 try:
                     # Build a test query to evaluate the condition
                     # Example: ASCII(SUBSTRING((SELECT username FROM users WHERE 1=1 LIMIT 1), 1, 1)) >= 64
-                    test_query = f"SELECT CASE WHEN {condition_sql} THEN 1 ELSE 0 END"
+                    # For SQLite, we need to handle the condition properly
+                    test_query = f"SELECT CASE WHEN ({condition_sql}) THEN 1 ELSE 0 END"
+                    # Debug: print test query
+                    print(f"[DEBUG] Test query: {test_query[:150]}")
                     cursor.execute(test_query)
                     test_result = cursor.fetchone()
                     
+                    # Debug: print result
+                    print(f"[DEBUG] Test result: {test_result}, should_delay will be: {test_result and test_result[0] == 1}")
+                    
                     if test_result and test_result[0] == 1:
                         should_delay = True
-                except:
+                    else:
+                        should_delay = False
+                except Exception as e:
                     # If condition evaluation fails, don't delay
+                    # This can happen with complex SQL that SQLite doesn't support
+                    # Debug: print error
+                    print(f"[DEBUG] Condition evaluation error: {e}")
                     should_delay = False
             else:
                 # No condition, just SLEEP() - always delay
+                print(f"[DEBUG] No condition found, always delaying")
                 should_delay = True
         
-        # Execute the actual query (always executed, but timing may vary)
-        cursor.execute(query)
-        results = cursor.fetchall()
-        
-        # Apply delay if condition was true
+        # Apply delay BEFORE executing query (in case query fails)
+        # This ensures delays are applied even if the SQL query has syntax errors
         if should_delay and delay_val:
+            print(f"[DEBUG] Applying delay of {delay_val}s")
             time.sleep(delay_val)
+        else:
+            if delay_val:
+                print(f"[DEBUG] NOT delaying (should_delay={should_delay}, delay_val={delay_val})")
+        
+        # Execute the actual query (always executed, but timing may vary)
+        # Note: This query may fail if it contains SQLite-incompatible functions like SLEEP()
+        # but we've already applied the delay above if needed
+        try:
+            cursor.execute(query)
+            results = cursor.fetchall()
+        except Exception as query_error:
+            # Query execution failed (e.g., SLEEP() doesn't exist in SQLite)
+            # This is expected - we've already applied the delay if needed
+            print(f"[DEBUG] Query execution error (expected for SLEEP): {type(query_error).__name__}")
+            results = []
         
     except Exception as e:
         # Don't reveal errors in production
