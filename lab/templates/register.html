@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Vulnerable Web App</title>
+    <title>Register - Vulnerable Web App</title>
     <style>
         * {
             margin: 0;
@@ -21,7 +21,7 @@
             padding: 20px;
         }
 
-        .login-container {
+        .register-container {
             background: white;
             border-radius: 20px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
@@ -42,18 +42,18 @@
             }
         }
 
-        .login-header {
+        .register-header {
             text-align: center;
             margin-bottom: 30px;
         }
 
-        .login-header h1 {
+        .register-header h1 {
             color: #333;
             font-size: 28px;
             margin-bottom: 8px;
         }
 
-        .login-header p {
+        .register-header p {
             color: #666;
             font-size: 14px;
         }
@@ -81,10 +81,10 @@
             border: 1px solid #fcc;
         }
 
-        .alert-info {
-            background-color: #e3f2fd;
-            color: #1976d2;
-            border: 1px solid #bbdefb;
+        .alert-success {
+            background-color: #efe;
+            color: #3c3;
+            border: 1px solid #cfc;
         }
 
         .form-group {
@@ -137,6 +137,16 @@
             transform: translateY(0);
         }
 
+        .btn-secondary {
+            background: #6c757d;
+            margin-top: 10px;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+            box-shadow: 0 10px 20px rgba(108, 117, 125, 0.3);
+        }
+
         .info-box {
             background-color: #f5f5f5;
             border-left: 4px solid #667eea;
@@ -151,9 +161,28 @@
             color: #333;
         }
 
+        .login-link {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .login-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .login-link a:hover {
+            text-decoration: underline;
+        }
+
         .footer {
             text-align: center;
-            margin-top: 30px;
+            margin-top: 20px;
             padding-top: 20px;
             border-top: 1px solid #e0e0e0;
             font-size: 12px;
@@ -162,10 +191,10 @@
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <div class="login-header">
-            <h1>🔐 Login</h1>
-            <p>Enter your credentials to access the system</p>
+    <div class="register-container">
+        <div class="register-header">
+            <h1>📝 Create Account</h1>
+            <p>Register a new user account</p>
         </div>
 
         {% if error %}
@@ -174,23 +203,25 @@
         </div>
         {% endif %}
 
-        {% if info %}
-        <div class="alert alert-info">
-            {{ info }}
+        {% if success %}
+        <div class="alert alert-success">
+            {{ success }}
         </div>
         {% endif %}
 
-        <form method="POST" action="/login">
+        <form method="POST" action="/register">
             <div class="form-group">
                 <label for="username">Username</label>
                 <input 
                     type="text" 
                     id="username" 
                     name="username" 
-                    placeholder="Enter username"
+                    placeholder="Choose a username"
                     required
                     autofocus
                     value="{{ request.form.username if request.form else '' }}"
+                    minlength="3"
+                    maxlength="50"
                 >
             </div>
 
@@ -200,22 +231,33 @@
                     type="password" 
                     id="password" 
                     name="password" 
-                    placeholder="Enter password"
+                    placeholder="Choose a password"
                     required
+                    minlength="3"
                 >
             </div>
 
-            <button type="submit" class="btn">Login</button>
+            <div class="form-group">
+                <label for="email">Email (Optional)</label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    name="email" 
+                    placeholder="your.email@example.com"
+                    value="{{ request.form.email if request.form else '' }}"
+                >
+            </div>
+
+            <button type="submit" class="btn">Create Account</button>
         </form>
 
-        <div class="info-box">
-            <strong>Note:</strong> Use credentials extracted via SQL injection to login, or create a new account.
-            This application is intentionally vulnerable for testing purposes.
+        <div class="login-link">
+            Already have an account? <a href="/login">Login here</a>
         </div>
 
-        <div style="text-align: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
-            <p style="color: #666; font-size: 14px; margin-bottom: 10px;">Don't have an account?</p>
-            <a href="/register" style="color: #667eea; text-decoration: none; font-weight: 600; font-size: 14px;">Create a new account</a>
+        <div class="info-box">
+            <strong>Note:</strong> After creating an account, you can use these credentials to login.
+            This application is intentionally vulnerable for testing purposes.
         </div>
 
         <div class="footer">

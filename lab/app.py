@@ -140,6 +140,51 @@ def dashboard():
                          email=session.get('email'),
                          user_id=session.get('user_id'))
 
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    """Registration page and registration handler."""
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        email = request.form.get('email', '').strip() or None
+        
+        # Validation
+        if not username or not password:
+            return render_template('register.html', error='Please enter both username and password')
+        
+        if len(username) < 3:
+            return render_template('register.html', error='Username must be at least 3 characters long')
+        
+        if len(password) < 3:
+            return render_template('register.html', error='Password must be at least 3 characters long')
+        
+        # Check if username already exists
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT id FROM users WHERE username = ?', (username,))
+        existing_user = cursor.fetchone()
+        
+        if existing_user:
+            conn.close()
+            return render_template('register.html', error='Username already exists. Please choose a different username.')
+        
+        # Create new user
+        try:
+            cursor.execute('INSERT INTO users (username, password, email) VALUES (?, ?, ?)', 
+                          (username, password, email))
+            conn.commit()
+            conn.close()
+            
+            # Registration successful - redirect to login with success message
+            return render_template('login.html', info=f'Account created successfully! You can now login with username: {username}')
+        except Exception as e:
+            conn.close()
+            return render_template('register.html', error=f'Error creating account: {str(e)}')
+    
+    # GET request - show registration page
+    return render_template('register.html')
+
 @app.route('/logout')
 def logout():
     """Logout handler."""
