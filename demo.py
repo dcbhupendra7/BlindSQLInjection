@@ -17,7 +17,7 @@ from statsqli.main import StatSQLi
 
 
 def get_available_users():
-    """Get list of available users from the database."""
+    """Get list of available user IDs from the database (without revealing usernames)."""
     # Try to find the database file (same logic as lab app)
     db_paths = ['lab/lab/vulnerable.db', 'lab/vulnerable.db', 'vulnerable.db']
     db_path = None
@@ -27,11 +27,13 @@ def get_available_users():
             try:
                 conn = sqlite3.connect(path)
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, username FROM users ORDER BY id")
-                users = cursor.fetchall()
+                # Only get IDs, not usernames - we want to extract usernames, not reveal them!
+                cursor.execute("SELECT id FROM users ORDER BY id")
+                user_ids = cursor.fetchall()
                 conn.close()
-                if users:
-                    return users, path
+                if user_ids:
+                    # Return just the IDs as a list
+                    return [uid[0] for uid in user_ids], path
             except Exception:
                 pass
     
@@ -74,18 +76,19 @@ def demo_extraction():
             max_workers=4
         )
         
-        # Get available users dynamically from database
-        users, db_path = get_available_users()
+        # Get available user IDs dynamically from database (without revealing usernames)
+        user_ids, db_path = get_available_users()
         
         # Ask which user to extract
         print("\n[*] Which user would you like to extract?")
-        if users:
-            user_list = ", ".join([f"{uid} ({username})" for uid, username in users])
-            print(f"    Available users: {user_list}")
-            valid_ids = [uid for uid, _ in users]
+        if user_ids:
+            # Only show IDs, not usernames - the whole point is to extract them!
+            user_list = ", ".join([str(uid) for uid in user_ids])
+            print(f"    Available user IDs: {user_list}")
+            valid_ids = user_ids
         else:
             print("    [Warning] Could not read users from database, using default IDs 1-5")
-            print("    Available users: 1, 2, 3, 4, 5")
+            print("    Available user IDs: 1, 2, 3, 4, 5")
             valid_ids = list(range(1, 6))
         
         user_choice = input("    Enter user ID (default: 1): ").strip()

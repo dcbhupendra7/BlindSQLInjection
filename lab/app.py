@@ -3,12 +3,15 @@ Vulnerable Flask application for testing time-based blind SQL injection.
 DO NOT USE IN PRODUCTION - FOR TESTING ONLY
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session
 import sqlite3
 import time
 import os
+import secrets
 
 app = Flask(__name__)
+# Set a secret key for session management
+app.secret_key = secrets.token_hex(16)
 
 # Initialize database
 # Use absolute path or relative to where app is run from
@@ -87,16 +90,61 @@ def init_db():
 
 @app.route('/')
 def index():
-    """Home page."""
-    return '''
-    <h1>Vulnerable Web Application</h1>
-    <p>This application has intentional SQL injection vulnerabilities for testing purposes.</p>
-    <h2>Endpoints:</h2>
-    <ul>
-        <li><code>GET /vulnerable?id=1</code> - Time-based blind SQL injection (SQLite)</li>
-    </ul>
-    <p><strong>WARNING:</strong> This application is intentionally vulnerable. Do not deploy in production!</p>
-    '''
+    """Home page - redirect to login or dashboard."""
+    if 'user_id' in session:
+        return redirect(url_for('dashboard'))
+    return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login page and login handler."""
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        
+        if not username or not password:
+            return render_template('login.html', error='Please enter both username and password')
+        
+        # Validate credentials against database
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Use parameterized query for login (not vulnerable to SQL injection)
+        # This is the correct way to do it - only the /vulnerable endpoint is intentionally vulnerable
+        cursor.execute('SELECT id, username, password, email FROM users WHERE username = ? AND password = ?', 
+                      (username, password))
+        user = cursor.fetchone()
+        conn.close()
+        
+        if user:
+            # Login successful
+            session['user_id'] = user[0]
+            session['username'] = user[1]
+            session['email'] = user[3]
+            return redirect(url_for('dashboard'))
+        else:
+            # Login failed
+            return render_template('login.html', error='Invalid username or password')
+    
+    # GET request - show login page
+    return render_template('login.html')
+
+@app.route('/dashboard')
+def dashboard():
+    """Dashboard page after successful login."""
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    return render_template('dashboard.html', 
+                         username=session.get('username'),
+                         email=session.get('email'),
+                         user_id=session.get('user_id'))
+
+@app.route('/logout')
+def logout():
+    """Logout handler."""
+    session.clear()
+    return redirect(url_for('login'))
 
 @app.route('/vulnerable')
 def vulnerable():
