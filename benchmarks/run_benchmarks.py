@@ -31,7 +31,7 @@ def check_server_running(url: str, timeout: int = 2) -> bool:
 def start_lab_server():
     """Start the lab server in the background."""
     print("[*] Starting lab server...")
-    lab_path = Path(__file__).parent / "lab" / "app.py"
+    lab_path = Path(__file__).parent.parent / "lab" / "app.py"
     
     if not lab_path.exists():
         print(f"[!] Lab server not found at {lab_path}")
@@ -61,7 +61,7 @@ def run_benchmarks(url: str, payload: str, iterations: int, user_id: int, output
     print("RUNNING BENCHMARKS")
     print("=" * 60)
     
-    benchmark_script = Path(__file__).parent / "benchmarks" / "compare_tools.py"
+    benchmark_script = Path(__file__).parent / "compare_tools.py"
     
     if not benchmark_script.exists():
         print(f"[!] Benchmark script not found at {benchmark_script}")
@@ -94,7 +94,7 @@ def generate_charts(results_file: str):
     print("GENERATING CHARTS")
     print("=" * 60)
     
-    chart_script = Path(__file__).parent / "benchmarks" / "generate_charts.py"
+    chart_script = Path(__file__).parent / "generate_charts.py"
     
     if not chart_script.exists():
         print(f"[!] Chart generation script not found at {chart_script}")
